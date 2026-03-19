@@ -1,0 +1,94 @@
+`timescale 1ns/1ps
+
+module tb_two_combs_attached;
+    parameter WIDTH = 32;
+    parameter NUM_CYCLES = 200;
+
+    reg clk;
+    reg reset;
+    reg xin;
+
+    // wires from top
+    wire [WIDTH-1:0] y1_out;
+    wire [WIDTH-1:0] y2_out;
+    wire [WIDTH-1:0] ds_out;
+    wire [WIDTH-1:0] comb1_out;
+    wire ds_valid;
+    wire comb1_valid;
+
+    // wires for comb2
+    wire [WIDTH-1:0] comb2_out;
+    wire comb2_valid;
+
+    // Instantiate your original top (I1,I2,DS,Comb1)
+    integrator_chain_with_downsampler_comb_nohold #(.WIDTH(WIDTH), .OSR(3)) TOP (
+        .clk(clk),
+        .reset(reset),
+        .xin(xin),
+        .y1_out(y1_out),
+        .y2_out(y2_out),
+        .ds_out(ds_out),
+        .comb_out(comb1_out),
+        .ds_valid(ds_valid),
+        .comb_valid(comb1_valid)
+    );
+
+    // Instantiate Comb2, consuming comb1 output
+    comb2_diff_nohold #(.WIDTH(WIDTH)) COMB2 (
+        .clk(clk),
+        .reset(reset),
+        .din(comb1_out),
+        .din_valid(comb1_valid),
+        .dout(comb2_out),
+        .dout_valid(comb2_valid)
+    );
+
+    // Clock generation
+    initial begin
+        clk = 0;
+        forever #0.0005 clk = ~clk; // 10ns period
+    end
+
+    integer i;
+
+    initial begin
+        // VCD setup for GTKWave
+        $dumpfile("sim_two_combs.vcd");
+        $dumpvars(0, tb_two_combs_attached);
+
+        $display("===== START SIMULATION (top + comb2) =====");
+        $display("Cycle | xin | Int1 | Int2 | Downsampler_out | Comb1_out | Comb2_out");
+        $display("--------------------------------------------------------------------");
+
+        // Reset
+        reset = 1'b1;
+        xin = 1'b0;
+        #0.0020;
+        reset = 1'b0;
+
+        // Run random bitstream
+        for (i = 0; i < NUM_CYCLES; i = i + 1) begin
+            xin = $urandom_range(0,1);
+            @(posedge clk);
+
+            // Print core columns
+            $write("%4d  |  %0b  | %5d | %5d | ", i, xin, y1_out, y2_out);
+
+            // Downsampler out (only when ds_valid)
+            if (ds_valid) $write("%14d | ", ds_out);
+            else          $write("              - | ");
+
+            // Comb1 out (only when comb1_valid)
+            if (comb1_valid) $write("%9d | ", comb1_out);
+            else             $write("        - | ");
+
+            // Comb2 out (only when comb2_valid)
+            if (comb2_valid) $write("%9d\n", comb2_out);
+            else             $write("        -\n");
+        end
+
+        $display("===== END SIMULATION =====");
+        $finish;
+    end
+
+endmodule

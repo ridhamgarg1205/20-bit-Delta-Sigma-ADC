@@ -1,0 +1,244 @@
+// =====================================================
+// integrator_chain_with_downsampler_comb_nohold_with_comb2.v
+// Your original code kept intact; comb2 moved to proper place and instantiated.
+// =====================================================
+`timescale 1ns/1ps
+
+// ----------------------
+// 1) INTEGRATOR
+// ----------------------
+module integrator #(parameter WIDTH = 2000) (
+    input  wire              clk,
+    input  wire              reset,
+    input  wire [WIDTH-1:0]  x_in,
+    output reg  [WIDTH-1:0]  y_out
+);
+    always @(posedge clk) begin
+        if (reset)
+            y_out <= {WIDTH{1'b0}};
+        else
+            y_out <= y_out + x_in;
+    end
+endmodule
+
+
+// ----------------------
+// 2) INTEGRATOR2 (cascade)
+// ----------------------
+module integrator2 #(parameter WIDTH = 2000) (
+    input  wire              clk,
+    input  wire              reset,
+    input  wire              xin,                  // single-bit input
+    output wire [WIDTH-1:0]  y_out,                // stage1 output
+    output wire [WIDTH-1:0]  z_out                 // stage2 output
+);
+
+    integrator #(.WIDTH(WIDTH)) I1 (
+        .clk(clk),
+        .reset(reset),
+        .x_in({{(WIDTH-1){1'b0}}, xin}),
+        .y_out(y_out)
+    );
+
+    integrator #(.WIDTH(WIDTH)) I2 (
+        .clk(clk),
+        .reset(reset),
+        .x_in(y_out),
+        .y_out(z_out)
+    );
+
+endmodule
+
+
+// ----------------------
+// 3) PARAMETERIZED DOWNSAMPLER (no-hold externally)
+//    - OSR: output every OSR-th sample (default 3 here)
+//    - dout shows 'x' when not valid (simulation clarity)
+// ----------------------
+module downsampler_nohold #(
+    parameter WIDTH = 2000,
+    parameter integer OSR = 100
+)(
+    input  wire              clk,
+    input  wire              reset,
+    input  wire [WIDTH-1:0]  din,
+    output wire [WIDTH-1:0]  dout,       // 'x' when not valid (sim only)
+    output reg               valid_out
+);
+
+    // portable clog2
+    function integer clog2;
+        input integer value;
+        integer i;
+        begin
+            value = value - 1;
+            for (i = 0; value > 0; i = i + 1)
+                value = value >> 1;
+            clog2 = i;
+        end
+    endfunction
+
+    localparam CNT_WIDTH = (OSR > 1) ? clog2(OSR) : 1;
+
+    reg [CNT_WIDTH-1:0] count;
+    reg [WIDTH-1:0] latched;
+
+    assign dout = (valid_out) ? latched : {WIDTH{1'bx}};
+
+    always @(posedge clk) begin
+        if (reset) begin
+            count     <= {CNT_WIDTH{1'b0}};
+            latched   <= {WIDTH{1'b0}};
+            valid_out <= 1'b0;
+        end else begin
+            valid_out <= 1'b0;
+            if (count == OSR - 1) begin
+                latched   <= din;
+                valid_out <= 1'b1;
+                count     <= {CNT_WIDTH{1'b0}};
+            end else begin
+                count <= count + 1'b1;
+            end
+        end
+    end
+
+endmodule
+
+
+// ----------------------
+// 4) COMB (s1): y[n] = x[n] - x[n-1]
+//    - Accepts incoming downsampled values and produces comb_out only
+//      on the same cycle (one-cycle pulse) that a new input arrives.
+//    - dout is 'x' when not valid (simulation clarity)
+// ----------------------
+module comb_diff_nohold #(
+    parameter WIDTH = 2000
+)(
+    input  wire              clk,
+    input  wire              reset,
+    input  wire [WIDTH-1:0]  din,        // downsampled input (valid when din_valid=1)
+    input  wire              din_valid,
+    output wire [WIDTH-1:0]  dout,       // shows 'x' when not valid
+    output reg               dout_valid
+);
+
+    // Use signed arithmetic to correctly handle negative differences if needed.
+    reg signed [WIDTH-1:0] prev;
+    reg signed [WIDTH-1:0] curr;
+    reg signed [WIDTH-1:0] diff;
+
+    assign dout = (dout_valid) ? diff : {WIDTH{1'bx}};
+
+    always @(posedge clk) begin
+        if (reset) begin
+            prev      <= {WIDTH{1'b0}};
+            curr      <= {WIDTH{1'b0}};
+            diff      <= {WIDTH{1'b0}};
+            dout_valid<= 1'b0;
+        end else begin
+            dout_valid <= 1'b0;
+            if (din_valid) begin
+                curr <= $signed(din);
+                // compute difference using previous stored value
+                diff <= $signed(din) - prev;
+                // update previous for next time
+                prev <= $signed(din);
+                dout_valid <= 1'b1;
+            end
+        end
+    end
+
+endmodule
+
+
+// ----------------------
+// Original top module (I1 -> I2 -> DS -> Comb1)
+// ----------------------
+module integrator_chain_with_downsampler_comb_nohold #(
+    parameter WIDTH = 2000,
+    parameter integer OSR = 100
+)(
+    input  wire              clk,
+    input  wire              reset,
+    input  wire              xin,         // bitstream input
+
+    // exposed for observation (ds_out is 'x' when not valid)
+    output wire [WIDTH-1:0]  y1_out,
+    output wire [WIDTH-1:0]  y2_out,
+    output wire [WIDTH-1:0]  ds_out,
+    output wire [WIDTH-1:0]  comb_out,
+    output wire              ds_valid,
+    output wire              comb_valid
+);
+
+    // integrator chain
+    integrator2 #(.WIDTH(WIDTH)) INT2 (
+        .clk(clk),
+        .reset(reset),
+        .xin(xin),
+        .y_out(y1_out),
+        .z_out(y2_out)
+    );
+
+    // downsampler
+    downsampler_nohold #(.WIDTH(WIDTH), .OSR(OSR)) DS (
+        .clk(clk),
+        .reset(reset),
+        .din(y2_out),
+        .dout(ds_out),
+        .valid_out(ds_valid)
+    );
+
+    // comb stage: consumes ds_out when ds_valid is asserted
+    comb_diff_nohold #(.WIDTH(WIDTH)) S1 (
+        .clk(clk),
+        .reset(reset),
+        .din(ds_out),
+        .din_valid(ds_valid),
+        .dout(comb_out),
+        .dout_valid(comb_valid)
+    );
+
+endmodule
+
+
+// =====================================================
+// COMB2 (2nd difference stage) - standalone module
+// y2[n] = comb1[n] - comb1[n-1]
+// - Same behavior as comb1: output only on din_valid pulse
+// - dout is 'x' when not valid (simulation clarity, no holding)
+// =====================================================
+module comb2_diff_nohold #(
+    parameter WIDTH = 2000
+)(
+    input  wire              clk,
+    input  wire              reset,
+    input  wire [WIDTH-1:0]  din,        // comb1 output (valid when din_valid = 1)
+    input  wire              din_valid,
+    output wire [WIDTH-1:0]  dout,       // shown only when valid
+    output reg               dout_valid
+);
+
+    // signed registers to support negative differences
+    reg signed [WIDTH-1:0] prev;
+    reg signed [WIDTH-1:0] diff;
+
+    assign dout = (dout_valid) ? diff : {WIDTH{1'bx}};  // no hold externally
+
+    always @(posedge clk) begin
+        if (reset) begin
+            prev       <= {WIDTH{1'b0}};
+            diff       <= {WIDTH{1'b0}};
+            dout_valid <= 1'b0;
+        end else begin
+            dout_valid <= 1'b0;
+
+            if (din_valid) begin
+                diff       <= $signed(din) - prev;   // compute difference
+                prev       <= $signed(din);          // store for next time
+                dout_valid <= 1'b1;                  // pulse
+            end
+        end
+    end
+
+endmodule

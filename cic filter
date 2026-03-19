@@ -1,0 +1,61 @@
+// CIC (Sinc) Decimation Filter Core Module
+// This module implements one stage of the N-stage CIC filter.
+// Note: This Verilog is based on the assumption that you will select
+// the bit widths (ACCUM_WIDTH, DECIMATION_RATIO) based on your MATLAB analysis.
+
+// Define constants based on MATLAB results
+`define N_ORDER 3 // Example: 3rd order CIC filter (Sinc^3)
+`define DECIMATION_RATIO 64 // Example OSR/Decimation factor
+`define ACCUM_WIDTH 24 // Example: Bit-width required to hold the maximum sum (from MATLAB)
+
+module cic_filter_core (
+    input wire clk_fast,   // Fast clock from the Modulator (fs)
+    input wire reset,      // System reset
+    input wire [1:0] data_in, // High-speed 1-bit or 2-bit input from Quantizer
+    output wire [`ACCUM_WIDTH-1:0] data_out // Final decimated output
+);
+
+    // --- 1. INTEGRATOR STAGES (Running at CLK_FAST) ---
+    // The Integrator output width must be wider than the input data to prevent overflow.
+
+    // Registers to hold the accumulation values
+    reg [`ACCUM_WIDTH-1:0] int_reg1, int_reg2, int_reg3;
+
+    // First Integrator Stage
+    always @(posedge clk_fast or posedge reset) begin
+        if (reset)
+            int_reg1 <= 0;
+        else
+            // Accumulation: New output = Old output + New input
+            int_reg1 <= int_reg1 + data_in;
+    end
+
+    // Second Integrator Stage (Input is output of first stage)
+    always @(posedge clk_fast or posedge reset) begin
+        if (reset)
+            int_reg2 <= 0;
+        else
+            int_reg2 <= int_reg2 + int_reg1;
+    end
+
+    // Third Integrator Stage (Input is output of second stage)
+    always @(posedge clk_fast or posedge reset) begin
+        if (reset)
+            int_reg3 <= 0;
+        else
+            int_reg3 <= int_reg3 + int_reg2;
+    end
+
+    // --- 2. DECIMATION INTERFACE ---
+    // The highest output of the Integrator stage is selected for decimation.
+    // The final Comb stage will run on the slow clock (f_out), which is not fully
+    // implemented here but is where the final subtraction happens after downsampling.
+    
+    // For simplicity, we pass the accumulated sum to the Comb block (not shown here)
+    wire [`ACCUM_WIDTH-1:0] integrator_output = int_reg3;
+    
+    // In a full implementation, a clock enable signal would trigger the Comb stage
+    // only once every DECIMATION_RATIO cycles (i.e., when the slow clock is high).
+    assign data_out = integrator_output; // Placeholder: Connect to Comb stage output later
+
+endmodule

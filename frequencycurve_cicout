@@ -1,0 +1,38 @@
+%% ==== Extract CIC output from Simulink ====
+data = out.cicout;  % automatic fetch
+
+% If timeseries, extract data + time
+if isa(data,'timeseries')
+    y = double(data.Data);  
+    t = double(data.Time);
+else
+    % If direct numeric output
+    y = double(data);
+    t = (0:length(y)-1)';
+end
+
+% Assure column vector
+y = y(:);
+t = t(:);
+
+%% ==== Sampling Frequency calculation ====
+Fs = 1 / (t(2) - t(1));
+N = length(y);
+
+%% ==== FFT ====
+Y = fft(y);
+P2 = abs(Y/N);
+P1 = P2(1:N/2+1);
+P1(2:end-1) = 2*P1(2:end-1);
+f = Fs*(0:(N/2))/N;
+
+%% ==== Plot Frequency Spectrum ====
+figure;
+plot(f,20*log10(P1 + eps),'LineWidth',1.2);
+title('CIC Output - Frequency Domain');
+xlabel('Frequency (Hz)');
+ylabel('Magnitude (dB)');
+grid on;
+xlim([0 Fs/2]);
+
+disp("FFT Plot Done Successfully! 😄");
