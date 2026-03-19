@@ -1,0 +1,25 @@
+% Get CIC output data from Simulink result
+y = double(cicout.signals.values);   % Ensure double datatype
+
+% Sampling frequency (Hz) — update if your fs is different
+fs = 10e6;   % 10 MHz
+
+N = length(y);
+
+% FFT
+Y = fft(y, N);
+
+% Frequency vector
+f = (0:N-1)*(fs/N);
+
+% Only positive half (for real signals)
+Y_half = Y(1:N/2);
+f_half = f(1:N/2);
+
+% Plot magnitude (dB)
+figure;
+semilogx(f_half, 20*log10(abs(Y_half)));
+grid on;
+title('Frequency Response of CIC Output (cicout)');
+xlabel('Frequency (Hz)');
+ylabel('Magnitude (dB)');
